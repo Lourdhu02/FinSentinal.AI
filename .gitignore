@@ -1,0 +1,29 @@
+# Never commit real financial data
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Environment secrets
+.env
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# FAISS index
+*.faiss
+*.index
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini

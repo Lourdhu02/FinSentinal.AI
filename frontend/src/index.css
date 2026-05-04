@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Global ─── */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: #FFFFFF;
+  color: #1D1D1F;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+/* ─── Minimalist Elements ─── */
+.input-minimal {
+  @apply w-full px-4 py-3 bg-surface border border-transparent rounded-xl text-charcoal-900 placeholder-charcoal-400 transition-all duration-200 focus:bg-white focus:border-charcoal-900 focus:ring-1 focus:ring-charcoal-900 focus:outline-none;
+}
+
+.btn-minimal {
+  @apply bg-charcoal-900 text-white font-medium rounded-xl py-3 px-4 active:scale-[0.98] transition-transform duration-200 flex items-center justify-center gap-2 hover:bg-black;
+}
+
+.btn-secondary {
+  @apply bg-surface text-charcoal-900 font-medium rounded-xl py-3 px-4 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2 hover:bg-surfaceHover;
+}
+
+/* ─── iOS Style Translucency ─── */
+.blur-header {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(24px) saturate(180%);
+  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+/* ─── Staggered Animation Utilities ─── */
+.stagger-1 { animation-delay: 0ms; }
+.stagger-2 { animation-delay: 50ms; }
+.stagger-3 { animation-delay: 100ms; }
+.stagger-4 { animation-delay: 150ms; }
+.stagger-5 { animation-delay: 200ms; }
+
+/* ─── Typing Dots ─── */
+.typing-dots span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #86868B;
+  margin: 0 2px;
+  animation: dotBounce 1.4s infinite ease-in-out;
+}
+.typing-dots span:nth-child(1) { animation-delay: 0s; }
+.typing-dots span:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes dotBounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40%           { transform: translateY(-4px); }
+}
+
+/* ─── Scrollbar ─── */
+::-webkit-scrollbar { width: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #E5E5EA;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover { background: #86868B; }

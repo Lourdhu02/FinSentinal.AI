@@ -19,9 +19,10 @@ venv/
 dist/
 build/
 
-# FAISS index
+# Vector DB and uploads
 *.faiss
 *.index
+runtime/
 
 # OS
 .DS_Store

@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import os
+import warnings
+
+# Suppress noisy transformers/torch warnings
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+warnings.filterwarnings("ignore", message=".*__path__.*")
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 import numpy as np
 
@@ -19,7 +27,7 @@ class LocalEmbedder:
         try:
             from sentence_transformers import SentenceTransformer
 
-            self._model = SentenceTransformer(self.model_name, device="cpu", local_files_only=True)
+            self._model = SentenceTransformer(self.model_name, device="cpu")
             if hasattr(self._model, "get_embedding_dimension"):
                 detected_dimension = self._model.get_embedding_dimension()
             else:
@@ -55,3 +63,4 @@ class LocalEmbedder:
         if norm == 0:
             return vector.astype(np.float32)
         return (vector / norm).astype(np.float32)
+

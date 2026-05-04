@@ -6,12 +6,13 @@ from typing import Any
 
 from core.anomaly import AnomalyDetector
 from core.embedder import LocalEmbedder
+from core.extractor import UniversalExtractor
 from core.ingestion import IngestionService
 from core.llm_engine import OllamaEngine
 from core.retriever import Retriever
 from core.verifier import InvoiceVerifier
 from database.db_manager import DatabaseManager
-from database.vector_store import FAISSVectorStore
+from database.vector_store import ChromaDBVectorStore
 from models.invoice import Invoice
 from security.audit_logger import AuditLogger
 
@@ -22,7 +23,7 @@ class FinSentinelPipeline:
         db_manager: DatabaseManager | None = None,
         ingestion_service: IngestionService | None = None,
         embedder: LocalEmbedder | None = None,
-        vector_store: FAISSVectorStore | None = None,
+        vector_store: ChromaDBVectorStore | None = None,
         verifier: InvoiceVerifier | None = None,
         anomaly_detector: AnomalyDetector | None = None,
         llm_engine: OllamaEngine | None = None,
@@ -31,112 +32,162 @@ class FinSentinelPipeline:
         self.db = db_manager or DatabaseManager()
         self.ingestion = ingestion_service or IngestionService()
         self.embedder = embedder or LocalEmbedder()
-        self.vector_store = vector_store or FAISSVectorStore(dimension=self.embedder.dimension)
+        self.vector_store = vector_store or ChromaDBVectorStore()
         self.retriever = Retriever(self.embedder, self.vector_store)
         self.verifier = verifier or InvoiceVerifier()
         self.anomaly_detector = anomaly_detector or AnomalyDetector()
         self.llm_engine = llm_engine or OllamaEngine()
         self.audit_logger = audit_logger or AuditLogger(self.db)
+        self.extractor = UniversalExtractor()
+        self._conversation_history: list[dict[str, str]] = []
 
-    def ingest_and_store(self, source_path: str | Path, user_id: int | None = None) -> dict[str, Any]:
+    def ingest_and_store(self, source_path: str | Path, session_id: str, user_id: int | None = None) -> dict[str, Any]:
         path = Path(source_path)
         source_files = self.ingestion.get_supported_files(path)
         documents = self.ingestion.ingest(path)
         processed: list[dict[str, Any]] = []
-        stored_count = 0
-        duplicate_count = 0
-        error_count = 0
+        stored_count = error_count = 0
+
         for document in documents:
             try:
                 source_text = document.text if document.text else ""
                 if document.error and not source_text:
                     raise ValueError(document.error)
-                invoice = self._build_invoice(document.path, source_text, user_id)
-                verification = self.verifier.verify_invoice(invoice, self.db)
-                anomaly = self.anomaly_detector.score(invoice.total, self.db.get_invoice_totals())
-                invoice.metadata.update(
-                    {
-                        "file_type": document.file_type,
-                        "verification": verification.model_dump(),
-                        "anomaly": anomaly.model_dump(),
-                    }
-                )
-                if verification.duplicate:
-                    duplicate_count += 1
-                    processed.append(
-                        {
-                            "path": document.path,
-                            "status": "duplicate",
-                            "invoice_number": invoice.invoice_number,
-                            "duplicate_invoice_id": verification.duplicate_invoice_id,
-                        }
-                    )
-                    continue
-                stored_invoice = self.db.create_invoice(invoice)
-                chunks = self._chunk_text(invoice.content)
+                
+                chunks = self._chunk_text(source_text)
                 embeddings = self.embedder.embed_texts(chunks)
                 metadata = [
                     {
-                        "invoice_id": stored_invoice.id,
-                        "invoice_number": stored_invoice.invoice_number,
-                        "vendor_name": stored_invoice.vendor_name,
-                        "document_path": stored_invoice.document_path,
+                        "session_id": session_id,
+                        "document_path": document.path,
                         "text": chunk,
                         "chunk_index": index,
-                        "content_hash": stored_invoice.content_hash,
+                        "file_name": Path(document.path).name,
                     }
                     for index, chunk in enumerate(chunks)
                 ]
                 self.vector_store.add(embeddings, metadata)
                 stored_count += 1
-                processed.append(
-                    {
-                        "path": document.path,
-                        "status": "stored",
-                        "invoice_id": stored_invoice.id,
-                        "invoice_number": stored_invoice.invoice_number,
-                        "vendor_name": stored_invoice.vendor_name,
-                        "verification": verification.model_dump(),
-                        "anomaly": anomaly.model_dump(),
-                    }
-                )
+                processed.append({
+                    "path": document.path,
+                    "status": "stored",
+                    "file_name": Path(document.path).name,
+                })
             except Exception as exc:
                 error_count += 1
-                processed.append(
-                    {
-                        "path": document.path,
-                        "status": "error",
-                        "error": str(exc),
-                    }
-                )
+                processed.append({"path": document.path, "status": "error", "error": str(exc)})
+
         self.vector_store.save()
         return {
             "processed_count": len(source_files),
             "stored_count": stored_count,
-            "duplicate_count": duplicate_count,
             "error_count": error_count,
             "success_count": stored_count,
             "failed_count": max(0, len(source_files) - stored_count),
             "documents": processed,
         }
 
-    def query(self, question: str, user_id: int | None = None, top_k: int = 5) -> dict[str, Any]:
-        route = self.retriever.analyze_query(question)
-        results = self.retriever.retrieve(question, top_k=top_k)
-        invoice_summaries = self._build_invoice_summaries(results)
-        deterministic_response = self._handle_structured_query(route)
-        response = deterministic_response if deterministic_response is not None else self.llm_engine.generate(
+    def query(self, question: str, session_id: str, user_id: int | None = None, top_k: int = 20) -> dict[str, Any]:
+        # Perform session-based retrieval
+        query_embedding = self.retriever.embedder.embed_query(question)
+        results = self.vector_store.search(query_embedding, top_k=top_k, filter_dict={"session_id": session_id})
+        
+        # Optional: rerank
+        results = self.retriever.rerank(question, results, top_n=10)
+
+        response = self.llm_engine.generate(
             question,
             results,
-            invoice_summaries,
+            [], # no longer using invoice summaries
+            conversation_history=self._conversation_history[-6:],
         )
+
+        self._conversation_history.append({"role": "user", "content": question})
+        self._conversation_history.append({"role": "assistant", "content": response})
+        if len(self._conversation_history) > 20:
+            self._conversation_history = self._conversation_history[-20:]
+
         self.audit_logger.log_interaction(user_id, "query", question, response)
-        return {
-            "query": question,
-            "response": response,
-            "results": results,
-            "invoice_summaries": invoice_summaries,
-        }
+        return {"query": question, "response": response, "results": results}
+
+    def reset_conversation(self) -> None:
+        self._conversation_history.clear()
+
+    def _build_invoice(self, document_path: str | Path, text: str, user_id: int | None) -> Invoice:
+        safe_text = text if text and text.strip() else Path(document_path).stem
+        try:
+            extracted = self.extractor.extract(safe_text, document_path)
+            fields = self.extractor.to_invoice_fields(extracted)
+            return Invoice.from_extracted(fields, safe_text, document_path, created_by=user_id)
+        except Exception:
+            try:
+                return Invoice.from_text(safe_text, document_path, created_by=user_id)
+            except Exception:
+                return Invoice.from_text(Path(document_path).stem, document_path, created_by=user_id)
+
+    def _rich_text(self, invoice: Invoice) -> str:
+        meta = invoice.metadata
+        parts = [invoice.content]
+        extras: list[str] = []
+
+        kind = meta.get("kind", "")
+        if kind == "salary_slip":
+            extras = [
+                f"Employee: {meta.get('employee_name', '')}",
+                f"Employee ID: {meta.get('employee_id', '')}",
+                f"Period: {meta.get('period', '')}",
+                f"Net Pay: {invoice.total}",
+                f"Gross Earnings: {meta.get('gross_earnings', '')}",
+                f"Basic Salary: {meta.get('basic_salary', '')}",
+                f"HRA: {meta.get('hra', '')}",
+                f"TDS: {meta.get('tds', '')}",
+                f"PF: {meta.get('pf', '')}",
+                f"Total Deductions: {meta.get('total_deductions', '')}",
+            ]
+        elif kind == "bank_statement":
+            extras = [
+                f"Account: {meta.get('account_number', '')}",
+                f"Period: {meta.get('period', '')}",
+                f"Opening Balance: {meta.get('opening_balance', '')}",
+                f"Closing Balance: {meta.get('closing_balance', '')}",
+                f"Total Credits: {meta.get('total_credits', '')}",
+                f"Total Debits: {meta.get('total_debits', '')}",
+            ]
+        elif kind == "gst_return":
+            extras = [
+                f"GSTIN: {meta.get('gstin', '')}",
+                f"Period: {meta.get('period', '')}",
+                f"Taxable Value: {meta.get('taxable_value', '')}",
+                f"CGST: {meta.get('cgst', '')}",
+                f"SGST: {meta.get('sgst', '')}",
+                f"IGST: {meta.get('igst', '')}",
+                f"Total Tax: {invoice.tax}",
+            ]
+        elif kind == "credit_debit_note":
+            extras = [
+                f"Note Type: {meta.get('note_type', '')}",
+                f"Original Invoice: {meta.get('original_invoice', '')}",
+                f"Reason: {meta.get('reason', '')}",
+                f"Amount: {invoice.total}",
+            ]
+        elif kind == "purchase_order":
+            extras = [
+                f"PO Number: {meta.get('po_number', invoice.invoice_number)}",
+                f"Delivery Date: {meta.get('delivery_date', '')}",
+                f"Payment Terms: {meta.get('payment_terms', '')}",
+                f"PO Total: {invoice.total}",
+            ]
+        elif kind == "invoice":
+            extras = [
+                f"Invoice Number: {invoice.invoice_number}",
+                f"GSTIN: {meta.get('gstin', '')}",
+                f"Subtotal: {invoice.subtotal}",
+                f"Tax: {invoice.tax}",
+                f"Total: {invoice.total}",
+            ]
+
+        parts.extend(e for e in extras if e.split(": ", 1)[-1].strip())
+        return "\n".join(parts)
 
     def _build_invoice_summaries(self, results: list[dict[str, Any]]) -> list[dict[str, Any]]:
         summaries: list[dict[str, Any]] = []
@@ -153,33 +204,35 @@ class FinSentinelPipeline:
                 invoice.total,
                 self.db.get_invoice_totals(exclude_invoice_id=invoice.id),
             )
-            summaries.append(
-                {
-                    "invoice_id": invoice.id,
-                    "invoice_number": invoice.invoice_number,
-                    "vendor_name": invoice.vendor_name,
-                    "total": invoice.total,
-                    "verification": verification.model_dump(),
-                    "anomaly": anomaly.model_dump(),
-                }
-            )
+            anomaly_dict = anomaly.model_dump()
+            anomaly_dict["explanation"] = invoice.metadata.get("anomaly", {}).get("explanation", "")
+            
+            summaries.append({
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.invoice_number,
+                "vendor_name": invoice.vendor_name,
+                "kind": invoice.metadata.get("kind", "unknown"),
+                "total": invoice.total,
+                "subtotal": invoice.subtotal,
+                "tax": invoice.tax,
+                "currency": invoice.currency,
+                "metadata": {
+                    k: v for k, v in invoice.metadata.items()
+                    if k not in ("verification", "anomaly", "file_type")
+                },
+                "verification": verification.model_dump(),
+                "anomaly": anomaly_dict,
+            })
             seen_ids.add(invoice_id)
         return summaries
 
-    def _build_invoice(self, document_path: str | Path, text: str, user_id: int | None) -> Invoice:
-        safe_text = text if text and text.strip() else Path(document_path).stem
-        try:
-            return Invoice.from_text(safe_text, document_path, created_by=user_id)
-        except Exception:
-            return Invoice.from_text(Path(document_path).stem, document_path, created_by=user_id)
-
-    def _handle_structured_query(self, route: dict[str, Any]) -> str | None:
+    def _handle_structured_query(self, route: dict[str, Any], question: str) -> str | None:
         kind = str(route.get("kind", "llm"))
         if kind == "total":
             invoices = self.db.get_all_invoices()
-            total_spend = sum(float(invoice.total) for invoice in invoices)
-            currency_symbol = self._currency_symbol(invoices)
-            return f"Total spend is {currency_symbol}{self._format_number(total_spend)}"
+            total_spend = sum(float(inv.total) for inv in invoices)
+            symbol = self._currency_symbol(invoices)
+            return f"Total spend across {len(invoices)} documents: {symbol}{self._format_number(total_spend)}"
         if kind == "count":
             target = route.get("target")
             if not target:
@@ -187,6 +240,17 @@ class FinSentinelPipeline:
             count = self._count_items(str(target))
             label = self._pluralize_target(str(target), count)
             return f"Total {label} purchased: {count}"
+        if kind == "vendor_summary":
+            summaries = self.db.get_vendor_summary()
+            if not summaries:
+                return "No vendor data found."
+            lines = ["Vendor spend summary:"]
+            for s in summaries[:10]:
+                lines.append(
+                    f"  {s['vendor_name']}: {s['invoice_count']} documents, "
+                    f"total = {self._format_number(s['total_spend'])}"
+                )
+            return "\n".join(lines)
         return None
 
     def _count_items(self, target: str) -> int:
@@ -205,22 +269,19 @@ class FinSentinelPipeline:
         fallback_total = 0
         for invoice in invoices:
             for line in invoice.content.splitlines():
-                lowered = line.lower()
-                if normalized_target not in self._normalize_target(lowered):
+                if normalized_target not in self._normalize_target(line.lower()):
                     continue
-                quantity = self._extract_quantity_from_line(line)
-                fallback_total += quantity
+                fallback_total += self._extract_quantity_from_line(line)
         return fallback_total
 
     def _extract_quantity_from_line(self, line: str) -> int:
-        patterns = [
+        for pattern in [
             r"(?i)\b(\d+)\s*(?:x|units?|pcs?|pieces?)?\s+[a-z]",
             r"(?i)[a-z]\s+(?:x|qty|quantity|units?|pcs?|pieces?)?\s*(\d+)\b",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, line)
-            if match:
-                return max(0, int(match.group(1)))
+        ]:
+            m = re.search(pattern, line)
+            if m:
+                return max(0, int(m.group(1)))
         return 1
 
     def _normalize_target(self, value: str) -> str:
@@ -238,20 +299,13 @@ class FinSentinelPipeline:
 
     def _currency_symbol(self, invoices: list[Invoice]) -> str:
         counts: dict[str, int] = {}
-        for invoice in invoices:
-            currency = invoice.currency or "USD"
-            counts[currency] = counts.get(currency, 0) + 1
+        for inv in invoices:
+            c = inv.currency or "INR"
+            counts[c] = counts.get(c, 0) + 1
         if not counts:
-            return "₹"
-        if set(counts) == {"USD"}:
-            return "₹"
-        primary = max(counts, key=counts.get)
-        return {
-            "INR": "₹",
-            "USD": "$",
-            "EUR": "€",
-            "GBP": "£",
-        }.get(primary, "")
+            return "â‚¹"
+        primary = max(counts, key=counts.__getitem__)
+        return {"INR": "â‚¹", "USD": "$", "EUR": "â‚¬", "GBP": "Â£"}.get(primary, "â‚¹")
 
     def _format_number(self, value: float) -> str:
         rounded = round(value, 2)

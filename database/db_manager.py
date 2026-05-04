@@ -1,8 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -10,26 +11,36 @@ from config import get_settings
 from models.invoice import Invoice
 from models.user import User
 
+_local = threading.local()
+
 
 class DatabaseManager:
     def __init__(self, db_path: str | Path | None = None) -> None:
         self.settings = get_settings()
         self.db_path = Path(db_path or self.settings.db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.connection = sqlite3.connect(self.db_path)
-        self.connection.row_factory = sqlite3.Row
         self.initialize()
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        if not hasattr(_local, "conn") or _local.conn is None:
+            _local.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            _local.conn.row_factory = sqlite3.Row
+            _local.conn.execute("PRAGMA foreign_keys = ON")
+            _local.conn.execute("PRAGMA journal_mode = WAL")
+        return _local.conn
 
     def initialize(self) -> None:
         schema_path = Path(__file__).with_name("schema.sql")
-        with schema_path.open("r", encoding="utf-8") as schema_file:
-            schema = schema_file.read()
-        self.connection.execute("PRAGMA foreign_keys = ON")
+        with schema_path.open("r", encoding="utf-8") as f:
+            schema = f.read()
         self.connection.executescript(schema)
         self.connection.commit()
 
     def close(self) -> None:
-        self.connection.close()
+        if hasattr(_local, "conn") and _local.conn:
+            _local.conn.close()
+            _local.conn = None
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).isoformat()
@@ -68,10 +79,7 @@ class DatabaseManager:
 
     def create_user(self, username: str, password_hash: str, role: str = "user") -> User:
         cursor = self.connection.execute(
-            """
-            INSERT INTO users (username, password_hash, role, is_active, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
+            "INSERT INTO users (username, password_hash, role, is_active, created_at) VALUES (?, ?, ?, ?, ?)",
             (username, password_hash, role, 1, self._now()),
         )
         self.connection.commit()
@@ -109,7 +117,7 @@ class DatabaseManager:
 
     def list_users(self) -> list[User]:
         rows = self.connection.execute("SELECT * FROM users ORDER BY created_at ASC").fetchall()
-        return [user for row in rows if (user := self._row_to_user(row)) is not None]
+        return [u for row in rows if (u := self._row_to_user(row)) is not None]
 
     def update_user_role(self, user_id: int, role: str) -> User | None:
         self.connection.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
@@ -122,22 +130,13 @@ class DatabaseManager:
             INSERT INTO invoices (
                 invoice_number, vendor_name, document_path, subtotal, tax, total,
                 currency, content, content_hash, metadata_json, created_by, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                invoice.invoice_number,
-                invoice.vendor_name,
-                invoice.document_path,
-                invoice.subtotal,
-                invoice.tax,
-                invoice.total,
-                invoice.currency,
-                invoice.content,
-                invoice.content_hash,
-                json.dumps(invoice.metadata),
-                invoice.created_by,
-                invoice.created_at.isoformat(),
+                invoice.invoice_number, invoice.vendor_name, invoice.document_path,
+                invoice.subtotal, invoice.tax, invoice.total, invoice.currency,
+                invoice.content, invoice.content_hash, json.dumps(invoice.metadata),
+                invoice.created_by, invoice.created_at.isoformat(),
             ),
         )
         self.connection.commit()
@@ -149,17 +148,29 @@ class DatabaseManager:
 
     def get_invoice_by_hash(self, content_hash: str) -> Invoice | None:
         row = self.connection.execute(
-            "SELECT * FROM invoices WHERE content_hash = ?",
-            (content_hash,),
+            "SELECT * FROM invoices WHERE content_hash = ?", (content_hash,)
         ).fetchone()
         return self._row_to_invoice(row)
 
     def list_invoices(self) -> list[Invoice]:
         rows = self.connection.execute("SELECT * FROM invoices ORDER BY created_at DESC").fetchall()
-        return [invoice for row in rows if (invoice := self._row_to_invoice(row)) is not None]
+        return [inv for row in rows if (inv := self._row_to_invoice(row)) is not None]
 
     def get_all_invoices(self) -> list[Invoice]:
         return self.list_invoices()
+
+    def get_invoices_by_vendor(self, vendor_name: str) -> list[Invoice]:
+        rows = self.connection.execute(
+            "SELECT * FROM invoices WHERE LOWER(vendor_name) LIKE LOWER(?)",
+            (f"%{vendor_name}%",),
+        ).fetchall()
+        return [inv for row in rows if (inv := self._row_to_invoice(row)) is not None]
+
+    def get_invoices_above_total(self, threshold: float) -> list[Invoice]:
+        rows = self.connection.execute(
+            "SELECT * FROM invoices WHERE total >= ? ORDER BY total DESC", (threshold,)
+        ).fetchall()
+        return [inv for row in rows if (inv := self._row_to_invoice(row)) is not None]
 
     def get_all_line_items(self) -> list[dict]:
         items: list[dict] = []
@@ -172,20 +183,34 @@ class DatabaseManager:
             return []
         placeholders = ",".join("?" for _ in invoice_ids)
         rows = self.connection.execute(
-            f"SELECT * FROM invoices WHERE id IN ({placeholders})",
-            invoice_ids,
+            f"SELECT * FROM invoices WHERE id IN ({placeholders})", invoice_ids
         ).fetchall()
-        return [invoice for row in rows if (invoice := self._row_to_invoice(row)) is not None]
+        return [inv for row in rows if (inv := self._row_to_invoice(row)) is not None]
 
     def get_invoice_totals(self, exclude_invoice_id: int | None = None) -> list[float]:
         if exclude_invoice_id is None:
             rows = self.connection.execute("SELECT total FROM invoices").fetchall()
         else:
             rows = self.connection.execute(
-                "SELECT total FROM invoices WHERE id != ?",
-                (exclude_invoice_id,),
+                "SELECT total FROM invoices WHERE id != ?", (exclude_invoice_id,)
             ).fetchall()
         return [float(row["total"]) for row in rows]
+
+    def get_vendor_summary(self) -> list[dict]:
+        rows = self.connection.execute(
+            """
+            SELECT vendor_name,
+                   COUNT(*) as invoice_count,
+                   SUM(total) as total_spend,
+                   AVG(total) as avg_invoice,
+                   MAX(total) as max_invoice,
+                   MIN(total) as min_invoice
+            FROM invoices
+            GROUP BY LOWER(vendor_name)
+            ORDER BY total_spend DESC
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def create_audit_log(
         self,
@@ -198,9 +223,7 @@ class DatabaseManager:
     ) -> int:
         cursor = self.connection.execute(
             """
-            INSERT INTO audit_logs (
-                user_id, action, query_text, response_text, query_hash, response_hash, created_at
-            )
+            INSERT INTO audit_logs (user_id, action, query_text, response_text, query_hash, response_hash, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (user_id, action, query_text, response_text, query_hash, response_hash, self._now()),
@@ -210,8 +233,7 @@ class DatabaseManager:
 
     def list_audit_logs(self, limit: int = 50) -> list[dict]:
         rows = self.connection.execute(
-            "SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?",
-            (limit,),
+            "SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -219,58 +241,43 @@ class DatabaseManager:
         items: list[dict] = []
         lines = [line.strip() for line in invoice.content.splitlines() if line.strip()]
         ignored_tokens = {
-            "invoice",
-            "vendor",
-            "seller",
-            "from",
-            "subtotal",
-            "tax",
-            "vat",
-            "gst",
-            "cgst",
-            "sgst",
-            "igst",
-            "total",
-            "amount due",
-            "grand total",
-            "invoice total",
+            "invoice", "vendor", "seller", "from", "subtotal", "tax", "vat",
+            "gst", "cgst", "sgst", "igst", "total", "amount due", "grand total", "invoice total",
         }
         for line in lines:
             lowered = line.lower()
             if any(token in lowered for token in ignored_tokens):
                 continue
-            leading_match = re.search(
+            leading = re.search(
                 r"(?i)\b(?P<qty>\d+(?:\.\d+)?)\s*(?:x|units?|pcs?|pieces?)?\s+(?P<desc>[a-z][a-z0-9 /&().,_-]{2,})$",
                 line,
             )
-            trailing_match = re.search(
+            trailing = re.search(
                 r"(?i)^(?P<desc>[a-z][a-z0-9 /&().,_-]{2,}?)\s+(?:x|qty|quantity|units?|pcs?|pieces?)?\s*(?P<qty>\d+(?:\.\d+)?)$",
                 line,
             )
-            embedded_match = re.search(
+            embedded = re.search(
                 r"(?i)\b(?P<desc>[a-z][a-z0-9 /&().,_-]{2,}?)\s+(?P<qty>\d+(?:\.\d+)?)\b",
                 line,
             )
-            match = leading_match or trailing_match or embedded_match
+            match = leading or trailing or embedded
             if match is None:
                 continue
             description = re.sub(r"\s+", " ", match.group("desc")).strip(" -:")
             quantity = self._normalize_quantity(match.group("qty"))
             if not description or quantity <= 0:
                 continue
-            items.append(
-                {
-                    "invoice_id": invoice.id,
-                    "invoice_number": invoice.invoice_number,
-                    "vendor_name": invoice.vendor_name,
-                    "description": description,
-                    "quantity": quantity,
-                }
-            )
+            items.append({
+                "invoice_id": invoice.id,
+                "invoice_number": invoice.invoice_number,
+                "vendor_name": invoice.vendor_name,
+                "description": description,
+                "quantity": quantity,
+            })
         return items
 
-    def _normalize_quantity(self, raw_value: str) -> int:
+    def _normalize_quantity(self, raw: str) -> int:
         try:
-            return max(0, int(float(raw_value)))
+            return max(0, int(float(raw)))
         except (TypeError, ValueError):
             return 0

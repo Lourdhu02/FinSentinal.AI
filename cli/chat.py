@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from getpass import getpass
 
@@ -15,14 +15,22 @@ def run_chat(username: str, password: str | None = None) -> int:
     user = auth.authenticate_user(db, username, password)
     RBACManager().require_permission(user, "chat")
     pipeline = FinSentinelPipeline(db_manager=db)
-    print(f"Authenticated as {user.username} ({user.role})")
-    print("Type 'exit' or 'quit' to end the session.")
+    print(f"\nAuthenticated as {user.username} ({user.role})")
+    print("Commands: 'exit'/'quit' to end  |  'reset' to clear conversation history\n")
     while True:
-        query = input("chat> ").strip()
+        try:
+            query = input("finsentinel> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nSession ended.")
+            break
         if not query:
             continue
         if query.lower() in {"exit", "quit"}:
             break
+        if query.lower() == "reset":
+            pipeline.reset_conversation()
+            print("Conversation history cleared.")
+            continue
         result = pipeline.query(query, user_id=user.id)
-        print(result["response"])
+        print(f"\n{result['response']}\n")
     return 0

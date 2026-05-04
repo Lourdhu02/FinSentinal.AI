@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,11 +39,10 @@ class IngestionService:
         path = Path(source_path)
         if not path.exists():
             raise FileNotFoundError(f"Path does not exist: {path}")
-        return [self._ingest_file(file_path) for file_path in self.get_supported_files(path)]
+        return [self._ingest_file(fp) for fp in self.get_supported_files(path)]
 
     def ingest_text(self, source_path: str | Path) -> str:
-        documents = self.ingest(source_path)
-        return "\n\n".join(document.text for document in documents if document.text)
+        return "\n\n".join(d.text for d in self.ingest(source_path) if d.text)
 
     def detect_file_type(self, file_path: str | Path) -> str:
         return self.SUPPORTED_SUFFIXES.get(Path(file_path).suffix.lower(), "unknown")
@@ -54,11 +53,10 @@ class IngestionService:
             raise FileNotFoundError(f"Path does not exist: {path}")
         if path.is_file():
             return [path] if path.suffix.lower() in self.SUPPORTED_SUFFIXES else []
-        allowed_suffixes = {".pdf", ".png", ".jpg", ".jpeg"}
+        # FIXED: respect ALL supported suffixes, not just pdf/png/jpg/jpeg
         return sorted(
-            file_path
-            for file_path in path.rglob("*")
-            if file_path.is_file() and file_path.suffix.lower() in allowed_suffixes
+            fp for fp in path.rglob("*")
+            if fp.is_file() and fp.suffix.lower() in self.SUPPORTED_SUFFIXES
         )
 
     def _ingest_file(self, file_path: Path) -> IngestedDocument:

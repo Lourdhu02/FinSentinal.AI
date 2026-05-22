@@ -18,12 +18,12 @@ def run_upload(path: str, username: str, password: str | None = None) -> int:
         raise PermissionError("Authentication failed.")
     RBACManager().require_permission(user, "upload")
     pipeline = FinSentinelPipeline(db_manager=db)
-    session_id = f”user_{user.id}_default”
+    session_id = f"user_{user.id}_default"
     summary = pipeline.ingest_and_store(Path(path), session_id=session_id, user_id=user.id)
     print(
-        f”Processed {summary['processed_count']} files - “
-        f”{summary['success_count']} stored, “
-        f”{summary['failed_count']} failed”
+        f"Processed {summary['processed_count']} files - "
+        f"{summary['success_count']} stored, "
+        f"{summary['failed_count']} failed"
     )
     for item in summary["documents"]:
         status = item.get("status", "?")

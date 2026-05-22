@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -9,10 +10,10 @@ from config import get_settings
 
 
 class OllamaEngine:
-    def __init__(self, model_name: str | None = None, endpoint: str = "http://127.0.0.1:11434/api/generate") -> None:
+    def __init__(self, model_name: str | None = None, endpoint: str | None = None) -> None:
         self.settings = get_settings()
         self.model_name = model_name or self.settings.model_name
-        self.endpoint = endpoint
+        self.endpoint = endpoint or os.getenv("OLLAMA_ENDPOINT", "http://127.0.0.1:11434/api/generate")
 
     def build_prompt(
         self,

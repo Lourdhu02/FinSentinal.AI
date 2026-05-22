@@ -1,9 +1,8 @@
-import os
-import uuid
+import re
 from typing import Any
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from api.routes.auth import get_current_user
 from models.user import User
@@ -13,6 +12,14 @@ from config import get_settings
 router = APIRouter()
 settings = get_settings()
 pipeline = FinSentinelPipeline()
+
+def _sanitize_filename(filename: str) -> str:
+    """Strip path components and dangerous characters to prevent path traversal."""
+    # Extract just the filename, discarding any directory components
+    name = PurePosixPath(filename).name or Path(filename).name
+    # Remove any remaining problematic characters
+    name = re.sub(r'[^\w\s\-.]', '_', name).strip()
+    return name or "unnamed_file"
 
 class DocumentResponse(BaseModel):
     filename: str
@@ -33,7 +40,8 @@ async def upload_documents(
     
     responses = []
     for file in files:
-        file_path = upload_dir / file.filename
+        safe_name = _sanitize_filename(file.filename)
+        file_path = upload_dir / safe_name
         with open(file_path, "wb") as f:
             f.write(await file.read())
             
@@ -41,11 +49,11 @@ async def upload_documents(
             result = pipeline.ingest_and_store(file_path, session_id=session_id, user_id=current_user.id)
             errors = [d for d in result.get("documents", []) if d.get("status") == "error"]
             if errors:
-                responses.append(DocumentResponse(filename=file.filename, status="error", message=errors[0].get("error")))
+                responses.append(DocumentResponse(filename=safe_name, status="error", message=errors[0].get("error")))
             else:
-                responses.append(DocumentResponse(filename=file.filename, status="success", message="Indexed into ChromaDB"))
+                responses.append(DocumentResponse(filename=safe_name, status="success", message="Indexed into ChromaDB"))
         except Exception as e:
-            responses.append(DocumentResponse(filename=file.filename, status="error", message=str(e)))
+            responses.append(DocumentResponse(filename=safe_name, status="error", message=str(e)))
             
     return responses
 

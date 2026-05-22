@@ -85,6 +85,13 @@ python -m venv venv
 # Install requirements
 pip install -r requirements.txt
 
+# Configure environment variables
+cp .env.example .env
+# Edit .env and set FINSENTINEL_JWT_SECRET to a random secret
+
+# Initialize database and admin user
+python setup.py
+
 # Start the FastAPI Server (runs on http://localhost:8000)
 python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
 ```

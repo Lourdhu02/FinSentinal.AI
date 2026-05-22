@@ -1,5 +1,7 @@
 # Never commit real financial data
 data/
+
+# Database
 *.db
 *.db-shm
 *.db-wal
@@ -18,11 +20,27 @@ venv/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
 
 # Vector DB and uploads
 *.faiss
 *.index
 runtime/
+
+# ChromaDB persistence
+chroma/
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # OS
 .DS_Store

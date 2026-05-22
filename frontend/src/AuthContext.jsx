@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
+import api from './api';
 
 const AuthContext = createContext(null);
 
@@ -15,7 +15,7 @@ export const AuthProvider = ({ children }) => {
 
   const fetchUser = useCallback(async () => {
     try {
-      const res = await axios.get('http://localhost:8000/api/auth/me');
+      const res = await api.get('/api/auth/me');
       setUser(res.data);
     } catch {
       logout();
@@ -24,10 +24,8 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       fetchUser();
     } else {
-      delete axios.defaults.headers.common['Authorization'];
       setUser(null);
     }
   }, [token, fetchUser]);
@@ -37,13 +35,13 @@ export const AuthProvider = ({ children }) => {
     formData.append('username', username);
     formData.append('password', password);
 
-    const res = await axios.post('http://localhost:8000/api/auth/login', formData);
+    const res = await api.post('/api/auth/login', formData);
     localStorage.setItem('token', res.data.access_token);
     setToken(res.data.access_token);
   };
 
   const register = async (username, password) => {
-    await axios.post('http://localhost:8000/api/auth/register', { username, password });
+    await api.post('/api/auth/register', { username, password });
     await login(username, password);
   };
 

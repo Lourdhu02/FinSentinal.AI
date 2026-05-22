@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import axios from 'axios';
+import api from './api';
 import { useAuth } from './AuthContext';
 import {
   FileText, Trash2, LogOut, MessageSquare,
@@ -18,7 +18,7 @@ export default function Dashboard() {
 
   const fetchDocuments = useCallback(async () => {
     try {
-      const res = await axios.get('http://localhost:8000/api/documents/list');
+      const res = await api.get('/api/documents/list');
       setDocuments(res.data.documents || []);
     } catch (err) {
       console.error('Failed to fetch documents', err);
@@ -42,7 +42,7 @@ export default function Dashboard() {
     }
 
     try {
-      await axios.post('http://localhost:8000/api/documents/upload', formData, {
+      await api.post('/api/documents/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
       });
       fetchDocuments();
@@ -57,7 +57,7 @@ export default function Dashboard() {
 
   const handleDelete = async (filename) => {
     try {
-      await axios.delete(`http://localhost:8000/api/documents/${filename}`);
+      await api.delete(`/api/documents/${filename}`);
       fetchDocuments();
     } catch (err) {
       console.error('Delete failed', err);

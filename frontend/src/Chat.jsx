@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import axios from 'axios';
+import api from './api';
 import { ArrowLeft, Send, Sparkles, Info, FileText, ChevronDown, Check, Copy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -30,7 +30,7 @@ export default function Chat() {
     setIsLoading(true);
 
     try {
-      const res = await axios.post('http://localhost:8000/api/chat/', { query: userQuery });
+      const res = await api.post('/api/chat/', { query: userQuery });
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: res.data.response,

@@ -15,6 +15,7 @@ def run_chat(username: str, password: str | None = None) -> int:
     user = auth.authenticate_user(db, username, password)
     RBACManager().require_permission(user, "chat")
     pipeline = FinSentinelPipeline(db_manager=db)
+    session_id = f"user_{user.id}_default"
     print(f"\nAuthenticated as {user.username} ({user.role})")
     print("Commands: 'exit'/'quit' to end  |  'reset' to clear conversation history\n")
     while True:
@@ -31,6 +32,6 @@ def run_chat(username: str, password: str | None = None) -> int:
             pipeline.reset_conversation()
             print("Conversation history cleared.")
             continue
-        result = pipeline.query(query, user_id=user.id)
+        result = pipeline.query(query, session_id=session_id, user_id=user.id)
         print(f"\n{result['response']}\n")
     return 0

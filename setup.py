@@ -5,7 +5,7 @@ import json
 
 from config import get_settings
 from database.db_manager import DatabaseManager
-from database.vector_store import FAISSVectorStore
+from database.vector_store import ChromaDBVectorStore
 from security.auth import AuthManager
 
 
@@ -30,11 +30,10 @@ def initialize_system(admin_username: str = "admin", admin_password: str = "admi
         )
         db.connection.commit()
         existing = db.get_user_by_username(admin_username)
-    vector_store = FAISSVectorStore()
-    vector_store.save()
+    vector_store = ChromaDBVectorStore()
     return {
         "db_path": str(settings.db_path),
-        "faiss_index_path": str(settings.faiss_index_path),
+        "chroma_dir": str(settings.data_dir / "chroma"),
         "admin_username": existing.username,
         "admin_token": auth.create_access_token(existing),
     }

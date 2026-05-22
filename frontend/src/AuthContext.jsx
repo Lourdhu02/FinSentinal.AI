@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
 const AuthContext = createContext(null);
@@ -6,6 +6,21 @@ const AuthContext = createContext(null);
 export const AuthProvider = ({ children }) => {
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [user, setUser] = useState(null);
+
+  const logout = useCallback(() => {
+    localStorage.removeItem('token');
+    setToken(null);
+    setUser(null);
+  }, []);
+
+  const fetchUser = useCallback(async () => {
+    try {
+      const res = await axios.get('http://localhost:8000/api/auth/me');
+      setUser(res.data);
+    } catch {
+      logout();
+    }
+  }, [logout]);
 
   useEffect(() => {
     if (token) {
@@ -15,22 +30,13 @@ export const AuthProvider = ({ children }) => {
       delete axios.defaults.headers.common['Authorization'];
       setUser(null);
     }
-  }, [token]);
-
-  const fetchUser = async () => {
-    try {
-      const res = await axios.get('http://localhost:8000/api/auth/me');
-      setUser(res.data);
-    } catch (err) {
-      logout();
-    }
-  };
+  }, [token, fetchUser]);
 
   const login = async (username, password) => {
     const formData = new URLSearchParams();
     formData.append('username', username);
     formData.append('password', password);
-    
+
     const res = await axios.post('http://localhost:8000/api/auth/login', formData);
     localStorage.setItem('token', res.data.access_token);
     setToken(res.data.access_token);
@@ -41,12 +47,6 @@ export const AuthProvider = ({ children }) => {
     await login(username, password);
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    setToken(null);
-    setUser(null);
-  };
-
   return (
     <AuthContext.Provider value={{ user, token, login, register, logout }}>
       {children}
@@ -54,4 +54,5 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);

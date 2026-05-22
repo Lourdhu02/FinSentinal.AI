@@ -1,6 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
-import { ArrowLeft, Send, Sparkles, User, Info, FileText, ChevronDown, Check, Copy } from 'lucide-react';
+import { ArrowLeft, Send, Sparkles, Info, FileText, ChevronDown, Check, Copy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export default function Chat() {
@@ -36,7 +36,7 @@ export default function Chat() {
         content: res.data.response,
         sources: res.data.sources
       }]);
-    } catch (err) {
+    } catch {
       setMessages(prev => [...prev, {
         role: 'assistant',
         content: 'Failed to connect to the AI engine. Please verify the backend is running.',

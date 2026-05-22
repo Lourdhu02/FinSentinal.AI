@@ -17,5 +17,10 @@ export default defineConfig([
       globals: globals.browser,
       parserOptions: { ecmaFeatures: { jsx: true } },
     },
+    rules: {
+      // Allow calling async functions (data fetching) inside useEffect,
+      // which is the standard React pattern for API synchronization
+      'react-hooks/set-state-in-effect': 'off',
+    },
   },
 ])

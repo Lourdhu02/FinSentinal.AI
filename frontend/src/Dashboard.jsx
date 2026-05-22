@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { useAuth } from './AuthContext';
 import {
@@ -16,18 +16,18 @@ export default function Dashboard() {
   const fileInputRef = useRef(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
-    fetchDocuments();
-  }, []);
-
-  const fetchDocuments = async () => {
+  const fetchDocuments = useCallback(async () => {
     try {
       const res = await axios.get('http://localhost:8000/api/documents/list');
       setDocuments(res.data.documents || []);
     } catch (err) {
       console.error('Failed to fetch documents', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    fetchDocuments();
+  }, [fetchDocuments]);
 
   const handleFileUpload = async (e) => {
     const files = e.target.files;
